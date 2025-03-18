@@ -64,6 +64,17 @@ impl<'a> PredicateObjectIter<'a> {
         // not found
         PredicateObjectIter { triples, pos_index: 999, max_index: 0 }
     }
+
+    pub fn new_with_offset(triples: &'a TriplesBitmap, p: Id, o: Id, op_offset: Option<usize>) -> Self {
+        match op_offset {
+            None => PredicateObjectIter::new(triples, p, o),
+            Some(offset) => {
+                let mut base = PredicateObjectIter::new(triples, p, o);
+                base.pos_index += offset; // as if we called `next` offset times
+                base
+            }
+        }
+    }
 }
 
 impl Iterator for PredicateObjectIter<'_> {
@@ -75,8 +86,39 @@ impl Iterator for PredicateObjectIter<'_> {
         let pos_y = self.triples.op_index.sequence.access(self.pos_index).unwrap();
         //let y = self.triples.wavelet_y.get(pos_y as usize) as Id;
         //println!(" op p {y}");
-        let s = self.triples.bitmap_y.rank(pos_y) as Id + 1;
+        let s = self.triples.adjlist_y.bitmap.rank(pos_y) as Id + 1;
         self.pos_index += 1;
         Some(s)
+    }
+
+    /// Provides exact cardinality on VPO
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.pos_index > self.max_index {(0, Some(0))}
+        else {(self.max_index - self.pos_index + 1, Some(self.max_index - self.pos_index + 1))}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Hdt, IdKind};
+
+    #[test]
+    fn skip_on_vpo() {
+        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let s = "http://db.uwaterloo.ca/~galuc/wsdbm/User44276".into();
+        let p = "http://db.uwaterloo.ca/~galuc/wsdbm/friendOf".into();
+        let o = "http://db.uwaterloo.ca/~galuc/wsdbm/User69629".into();
+
+        let sid = Some(hdt.dict.string_to_id(s, &IdKind::Subject));
+        let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
+        let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
+
+        // VPO
+        let count_vpo = hdt.triple_ids_with_pattern_and_offset(None, pid, oid, None);
+        println!("vpo  estim: {:?}  vs total : {}", count_vpo.size_hint(), count_vpo.count());
+        let skip_vpo = hdt.triple_ids_with_pattern_and_offset(None, pid, oid, Some(20));
+        println!("skip estim: {:?}  vs actual: {}\n", skip_vpo.size_hint(), skip_vpo.count());
     }
 }

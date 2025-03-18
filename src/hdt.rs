@@ -2,7 +2,7 @@ use crate::FourSectDict;
 use crate::containers::ControlInfo;
 use crate::four_sect_dict::{DictErr, IdKind};
 use crate::header::Header;
-use crate::triples::{ObjectIter, PredicateIter, PredicateObjectIter, SubjectIter, TripleId, TriplesBitmap};
+use crate::triples::{Id, ObjectIter, PredicateIter, PredicateObjectIter, SubjectIter, TripleId, TriplesBitmap};
 use bytesize::ByteSize;
 use eyre::WrapErr;
 use log::{debug, error};
@@ -270,6 +270,40 @@ impl Hdt {
                 )
             })),
             (None, None, None) => Box::new(self.triples()),
+        }
+    }
+
+    pub fn triple_ids_with_pattern_and_offset<'a>(
+        &'a self, sp: Option<Id>, pp: Option<Id>, op: Option<Id>, op_offset: Option<usize>,
+    ) -> Box<dyn Iterator<Item = TripleId> + 'a> {
+        // TODO: improve error handling
+        match (sp, pp, op) {
+            (Some(s), Some(p), Some(o)) => {
+                match SubjectIter::with_pattern(&self.triples, &TripleId::new(s, p, o)).next() {
+                    Some(_) => match op_offset {
+                        Some(_) => Box::new(iter::empty()), // offset should be >0 ofc
+                        None => Box::new(iter::once(TripleId::new(s, p, o))),
+                    }
+                    None => Box::new(iter::empty()),
+                }
+            }
+            (Some(s), Some(p), None) => {
+                Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(s, p, 0), op_offset))
+            }
+            (Some(s), None, Some(o)) => {
+                Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(s, 0, o), op_offset))
+            }
+            (Some(s), None, None) => {
+                Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(s, 0, 0), op_offset))
+            }
+            (None, Some(p), Some(o)) => {
+                Box::new(PredicateObjectIter::new_with_offset(&self.triples, p, o, op_offset).map(move |sid| {
+                    TripleId::new(sid, p, o)
+                }))
+            }
+            (None, Some(p), None) => Box::new(PredicateIter::new(&self.triples, p)), // TODO skip
+            (None, None, Some(o)) => Box::new(ObjectIter::new_with_offset(&self.triples, o, op_offset)),
+            (None, None, None) => Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(0,0,0), op_offset)),
         }
     }
 }

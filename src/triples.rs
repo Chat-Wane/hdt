@@ -1,16 +1,16 @@
-use crate::ControlInfo;
 use crate::containers::{AdjList, Bitmap, Sequence};
+use crate::ControlInfo;
 use bytesize::ByteSize;
-use eyre::{Result, WrapErr, eyre};
+use eyre::{eyre, Result, WrapErr};
 use log::{debug, error};
 use std::cmp::Ordering;
 use std::fmt;
 use std::io::BufRead;
 use sucds::{
-    Serializable,
     bit_vectors::{BitVector, Rank9Sel},
     char_sequences::WaveletMatrix,
     int_vectors::CompactVector,
+    Serializable,
 };
 
 mod subject_iter;
@@ -145,8 +145,8 @@ impl OpIndex {
 //#[derive(Clone)]
 pub struct TriplesBitmap {
     order: Order,
-    /// bitmap to find positions in the wavelet matrix
-    pub bitmap_y: Bitmap,
+    /// adjacency list storing bitmap to find positions in the wavelet matrix
+    pub adjlist_y: AdjList,
     /// adjacency list storing the object IDs
     pub adjlist_z: AdjList,
     /// Index for object-based access. Points to the predicate layer.
@@ -177,7 +177,7 @@ impl serde::Serialize for TriplesBitmap {
         state.serialize_field("order", &self.order)?;
 
         //bitmap_y
-        state.serialize_field("bitmap_y", &self.bitmap_y)?;
+        state.serialize_field("bitmap_y", &self.adjlist_y)?;
 
         // adjlist_z
         state.serialize_field("adjlist_z", &self.adjlist_z)?;
@@ -203,7 +203,7 @@ impl<'de> serde::Deserialize<'de> for TriplesBitmap {
         #[derive(serde::Deserialize)]
         struct TriplesBitmapData {
             order: Order,
-            pub bitmap_y: Bitmap,
+            pub adj_list_y: AdjList,
             pub adjlist_z: AdjList,
             pub op_index: OpIndex,
             pub wavelet_y: Vec<u8>,
@@ -218,7 +218,7 @@ impl<'de> serde::Deserialize<'de> for TriplesBitmap {
 
         let bitmap = TriplesBitmap {
             order: data.order,
-            bitmap_y: data.bitmap_y,
+            adjlist_y: data.adj_list_y,
             adjlist_z: data.adjlist_z,
             op_index: data.op_index,
             wavelet_y,
@@ -267,7 +267,7 @@ impl TriplesBitmap {
         if subject_id == 0 {
             return 0;
         }
-        self.bitmap_y.select1(subject_id - 1).unwrap() as usize + 1
+        self.adjlist_y.bitmap.select1(subject_id - 1).unwrap() as usize + 1
     }
 
     /// Position in the wavelet index of the last predicate for the given subject ID.
@@ -296,16 +296,16 @@ impl TriplesBitmap {
         self.bin_search_y(property_id, self.find_y(subject_id), self.last_y(subject_id) + 1)
     }
 
-    fn build_wavelet(mut sequence: Sequence) -> WaveletMatrix<Rank9Sel> {
+    fn build_wavelet(sequence: &Sequence) -> WaveletMatrix<Rank9Sel> {
         debug!("Building wavelet matrix...");
         let mut builder =
             CompactVector::new(sequence.bits_per_entry).expect("Failed to create wavelet matrix builder");
         // possible refactor of Sequence to use sucds CompactVector, then builder can be removed
-        for x in &sequence {
+        for x in sequence {
             builder.push_int(x).unwrap();
         }
-        assert!(sequence.crc_handle.take().unwrap().join().unwrap(), "Wavelet source CRC check failed.");
-        drop(sequence);
+            // assert!(sequence.crc_handle.take().unwrap().join().unwrap(), "Wavelet source CRC check failed.");
+        // drop(sequence);
         let wavelet = WaveletMatrix::new(builder).expect("Error building the wavelet matrix. Aborting.");
         debug!("Built wavelet matrix with length {}", wavelet.len());
         wavelet
@@ -334,8 +334,8 @@ impl TriplesBitmap {
 
         // read sequences
         let sequence_y = Sequence::read(reader)?;
-        let wavelet_thread = std::thread::spawn(|| Self::build_wavelet(sequence_y));
-        let mut sequence_z = Sequence::read(reader)?;
+        // let wavelet_thread = std::thread::spawn(|| Self::build_wavelet(sequence_y));
+        let sequence_z = Sequence::read(reader)?;
 
         // construct adjacency lists
         // construct object-based index to traverse from the leaves and support ??O and ?PO queries
@@ -363,7 +363,8 @@ impl TriplesBitmap {
         let mut bitmap_index_bitvector = BitVector::new();
         let mut cv = CompactVector::with_capacity(entries, sucds::utils::needed_bits(entries))
             .map_err(|err| eyre!(Box::new(err)))?;
-        let wavelet_y = wavelet_thread.join().unwrap();
+        // let wavelet_y = wavelet_thread.join().unwrap();
+        let wavelet_y = Self::build_wavelet(&sequence_y);
         /*
         let get_p = |pos_z: u32| {
             let pos_y = bitmap_z.dict.rank(pos_z.to_owned() as u64, true);
@@ -383,9 +384,10 @@ impl TriplesBitmap {
         let bitmap_index = Bitmap { dict: Rank9Sel::new(bitmap_index_bitvector) };
         let op_index = OpIndex { sequence: cv, bitmap: bitmap_index };
         debug!("built OPS index");
-        assert!(sequence_z.crc_handle.take().unwrap().join().unwrap(), "sequence_z CRC check failed.");
+        // assert!(sequence_z.crc_handle.take().unwrap().join().unwrap(), "sequence_z CRC check failed.");
         let adjlist_z = AdjList::new(sequence_z, bitmap_z);
-        Ok(TriplesBitmap { order, bitmap_y, adjlist_z, op_index, wavelet_y })
+        let adjlist_y = AdjList::new(sequence_y, bitmap_y);
+        Ok(TriplesBitmap { order, adjlist_y, adjlist_z, op_index, wavelet_y })
     }
 
     /// Transform the given IDs of the layers in triple section order to a triple ID.
