@@ -157,13 +157,18 @@ impl Iterator for SubjectIter<'_> {
         }
     }
 
-    /// Jumping to an offset efficiently.
+    /// Jumps to an offset efficiently for iterators VVV, SVV, SPV.
     /// This avoids the need to iterate over every element until reaching the desired
-    /// offset.
+    /// offset. (Except for SVO)
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.pos_z += n;
-        self.pos_y = self.triples.adjlist_z.bitmap.rank(self.pos_z - 1);
-        self.x = self.triples.bitmap_y.rank(self.pos_y - 1);
+        match self.search_z {
+            0 => { // Efficient for VVV, SVV, SPV
+                self.pos_z += n;
+                self.pos_y = self.triples.adjlist_z.bitmap.rank(self.pos_z -1);
+                self.x = self.triples.bitmap_y.rank(self.pos_y -1);
+            },
+            _ => { (0..n).for_each(|_| {self.next();}) } // SVO is not efficient
+        }
         self.next()
     }
 }
@@ -261,7 +266,7 @@ mod tests {
         // SVO
         let count_svo = hdt.triple_ids_with_pattern(sid, None, oid);
         println!("svo estim : {:?} vs total : {}", count_svo.size_hint(), count_svo.count());
-        let skip_svo = hdt.triple_ids_with_pattern(sid, None, oid).skip(20);
+        let skip_svo = hdt.triple_ids_with_pattern(sid, None, oid).skip(1);
         println!("skip estim: {:?} vs actual: {}\n", skip_svo.size_hint(), skip_svo.count());
 
         // SPO
