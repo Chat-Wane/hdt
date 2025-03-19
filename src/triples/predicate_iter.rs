@@ -22,6 +22,19 @@ impl<'a> PredicateIter<'a> {
         //println!("the predicate {} is used by {} subjects in the index", p, occs);
         PredicateIter { triples, p, i: 0, pos_z: 0, os: 0, s: 0, occs }
     }
+
+    /// Iterator for VPV that optionally skips to the offset. However,
+    /// there are no efficient way to jump immediately to the designated offset.
+    pub fn new_with_offset(triples: &'a TriplesBitmap, p: Id, op_offset: Option<usize>) -> Self {
+        match op_offset {
+            None => PredicateIter::new(triples, p),
+            Some(offset) => { // TODO double check that it cannot be efficiently skipped
+                let mut base = PredicateIter::new(triples, p);
+                base.nth(offset.saturating_sub(1));
+                base
+            },
+        }
+    }
 }
 
 impl Iterator for PredicateIter<'_> {
@@ -33,7 +46,7 @@ impl Iterator for PredicateIter<'_> {
         if self.os == 0 {
             // Algorithm 1 findSubj from Martinez et al. 2012 ******
             let pos_y = self.triples.wavelet_y.select(self.i, self.p as usize).unwrap();
-            self.s = self.triples.adjlist_y.bitmap.rank(pos_y) as Id + 1;
+            self.s = self.triples.bitmap_y.rank(pos_y) as Id + 1;
             // *****************************************************
             // SP can have multiple O
             self.pos_z = self.triples.adjlist_z.find(pos_y as Id);
@@ -50,5 +63,34 @@ impl Iterator for PredicateIter<'_> {
             self.i += 1;
         }
         Some(self.triples.coord_to_triple(self.s, self.p, o).unwrap())
+    }
+
+    /// Only the lower bound is known for VPV
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // but for each occs, there might have multiple values
+        // so we don't know the upper bound.
+        (self.occs, None)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::{Hdt, IdKind};
+
+    #[test]
+    fn skip_on_vpv() {
+        // todo
+        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let p = "http://db.uwaterloo.ca/~galuc/wsdbm/friendOf".into();
+        let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
+
+        // VPV
+        let count_vpv = hdt.triple_ids_with_pattern_and_offset(None, pid, None, None);
+        println!("vpv  estim: {:?}  vs total : {}", count_vpv.size_hint(), count_vpv.count());
+        let skip_vpv = hdt.triple_ids_with_pattern_and_offset(None, pid, None, Some(2_000_000));
+        println!("skip estim: {:?}  vs actual: {}\n", skip_vpv.size_hint(), skip_vpv.count());
     }
 }

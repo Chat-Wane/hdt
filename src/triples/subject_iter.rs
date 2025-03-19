@@ -112,16 +112,16 @@ impl<'a> SubjectIter<'a> {
         let mut base = SubjectIter::with_pattern(triples, pat);
         match op_offset {
             None => base, // regular
-            Some(pos) => { // with jump
+            Some(offset) => { // with jump
                 if base.search_z > 0 { // TODO make sure that it can't be skipped
-                    [0..pos].iter().for_each(|_i| _ = base.next());
+                    (0..offset).for_each(|_i| {base.next();});
                     return base;
                 }
                 // comes from:
                 // <https://github.com/rdfhdt/hdt-cpp/blob/d9ae092bb37d9fe85558dfb3edfe0bb6ddddf41a/libhdt/src/triples/BitmapTriplesIterators.cpp#L258>
                 let max_z: usize = triples.adjlist_z.len();
-                assert!(base.pos_z + pos < max_z); // TODO not throw, but be empty ?
-                let pos_z = base.pos_z + pos;
+                assert!(base.pos_z + offset < max_z); // TODO not throw, but be empty ?
+                let pos_z = base.pos_z + offset;
 
                 // BitmapTriplesSearchIterator::goToY
                 let mut pos_y = triples.adjlist_z.bitmap.rank(pos_z - 1) as Id;
@@ -130,7 +130,7 @@ impl<'a> SubjectIter<'a> {
                 // let y = triples.adjlist_y.sequence.get(pos_y);
                 // println!("{}", y);
                 // TODO if adjlist_y.sequence of no use, we can revert change in triples
-                let x = triples.adjlist_y.bitmap.rank(pos_y - 1) as Id;
+                let x = triples.bitmap_y.rank(pos_y - 1) as Id;
 
                 SubjectIter {
                     triples,
@@ -177,7 +177,7 @@ impl Iterator for SubjectIter<'_> {
         // theoretically the second condition should only be true if the first is as well but in practise it wasn't, which screwed up the subject identifiers
         // fixed by moving the second condition inside the first one but there may be another reason for the bug occuring in the first place
         if self.triples.adjlist_z.at_last_sibling(self.pos_z) {
-            if self.triples.adjlist_y.bitmap.at_last_sibling(self.pos_y) {
+            if self.triples.bitmap_y.at_last_sibling(self.pos_y) {
                 self.x += 1;
             }
             self.pos_y += 1;

@@ -1,8 +1,8 @@
-use crate::FourSectDict;
 use crate::containers::ControlInfo;
 use crate::four_sect_dict::{DictErr, IdKind};
 use crate::header::Header;
 use crate::triples::{Id, ObjectIter, PredicateIter, PredicateObjectIter, SubjectIter, TripleId, TriplesBitmap};
+use crate::FourSectDict;
 use bytesize::ByteSize;
 use eyre::WrapErr;
 use log::{debug, error};
@@ -273,10 +273,16 @@ impl Hdt {
         }
     }
 
+    /// Get all triple ids based on the ids of a triple pattern. Similar to
+    /// `triples_with_pattern` but removes the need to access the dictionary (i.e.
+    /// getting the actual value of each id), which proves useful when the query
+    /// is a basic graph pattern: joins are performed on identifiers, and we retrieve
+    /// the values only when a result is produced.
+    // TODO example of capitals with a bgp
     pub fn triple_ids_with_pattern_and_offset<'a>(
         &'a self, sp: Option<Id>, pp: Option<Id>, op: Option<Id>, op_offset: Option<usize>,
     ) -> Box<dyn Iterator<Item = TripleId> + 'a> {
-        // TODO: improve error handling
+        // TODO: as for `triples_with_pattern`, improve error handling
         match (sp, pp, op) {
             (Some(s), Some(p), Some(o)) => {
                 match SubjectIter::with_pattern(&self.triples, &TripleId::new(s, p, o)).next() {
@@ -301,7 +307,7 @@ impl Hdt {
                     TripleId::new(sid, p, o)
                 }))
             }
-            (None, Some(p), None) => Box::new(PredicateIter::new(&self.triples, p)), // TODO skip
+            (None, Some(p), None) => Box::new(PredicateIter::new_with_offset(&self.triples, p, op_offset)),
             (None, None, Some(o)) => Box::new(ObjectIter::new_with_offset(&self.triples, o, op_offset)),
             (None, None, None) => Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(0,0,0), op_offset)),
         }

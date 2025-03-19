@@ -49,7 +49,7 @@ impl Iterator for ObjectIter<'_> {
         }
         let pos_y = self.triples.op_index.sequence.access(self.pos_index).unwrap();
         let y = self.triples.wavelet_y.access(pos_y).unwrap() as Id;
-        let x = self.triples.adjlist_y.bitmap.rank(pos_y) as Id + 1;
+        let x = self.triples.bitmap_y.rank(pos_y) as Id + 1;
         self.pos_index += 1;
         Some(TripleId::new(x, y, self.o))
         //Some(self.triples.coord_to_triple(x, y, self.o).unwrap())
