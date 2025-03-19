@@ -96,6 +96,13 @@ impl Iterator for PredicateObjectIter<'_> {
         if self.pos_index > self.max_index {(0, Some(0))}
         else {(self.max_index - self.pos_index + 1, Some(self.max_index - self.pos_index + 1))}
     }
+
+    /// Efficiently jump to the designated offset without having
+    /// to iterate over each element.
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.pos_index += n;
+        self.next()
+    }
 }
 
 #[cfg(test)]
@@ -116,9 +123,9 @@ mod tests {
         let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
 
         // VPO
-        let count_vpo = hdt.triple_ids_with_pattern_and_offset(None, pid, oid, None);
+        let count_vpo = hdt.triple_ids_with_pattern(None, pid, oid);
         println!("vpo  estim: {:?}  vs total : {}", count_vpo.size_hint(), count_vpo.count());
-        let skip_vpo = hdt.triple_ids_with_pattern_and_offset(None, pid, oid, Some(20));
+        let skip_vpo = hdt.triple_ids_with_pattern(None, pid, oid).skip(20);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vpo.size_hint(), skip_vpo.count());
     }
 }

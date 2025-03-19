@@ -279,37 +279,33 @@ impl Hdt {
     /// is a basic graph pattern: joins are performed on identifiers, and we retrieve
     /// the values only when a result is produced.
     // TODO example of capitals with a bgp
-    pub fn triple_ids_with_pattern_and_offset<'a>(
-        &'a self, sp: Option<Id>, pp: Option<Id>, op: Option<Id>, op_offset: Option<usize>,
+    pub fn triple_ids_with_pattern<'a>(
+        &'a self, sp: Option<Id>, pp: Option<Id>, op: Option<Id>,
     ) -> Box<dyn Iterator<Item = TripleId> + 'a> {
-        // TODO: as for `triples_with_pattern`, improve error handling
         match (sp, pp, op) {
             (Some(s), Some(p), Some(o)) => {
                 match SubjectIter::with_pattern(&self.triples, &TripleId::new(s, p, o)).next() {
-                    Some(_) => match op_offset {
-                        Some(_) => Box::new(iter::empty()), // offset should be >0 ofc
-                        None => Box::new(iter::once(TripleId::new(s, p, o))),
-                    }
+                    Some(_) => Box::new(iter::once(TripleId::new(s, p, o))),
                     None => Box::new(iter::empty()),
                 }
             }
             (Some(s), Some(p), None) => {
-                Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(s, p, 0), op_offset))
+                Box::new(SubjectIter::with_pattern(&self.triples, &TripleId::new(s, p, 0)))
             }
             (Some(s), None, Some(o)) => {
-                Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(s, 0, o), op_offset))
+                Box::new(SubjectIter::with_pattern(&self.triples, &TripleId::new(s, 0, o)))
             }
             (Some(s), None, None) => {
-                Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(s, 0, 0), op_offset))
+                Box::new(SubjectIter::with_pattern(&self.triples, &TripleId::new(s, 0, 0)))
             }
             (None, Some(p), Some(o)) => {
-                Box::new(PredicateObjectIter::new_with_offset(&self.triples, p, o, op_offset).map(move |sid| {
+                Box::new(PredicateObjectIter::new(&self.triples, p, o).map(move |sid| {
                     TripleId::new(sid, p, o)
                 }))
             }
-            (None, Some(p), None) => Box::new(PredicateIter::new_with_offset(&self.triples, p, op_offset)),
-            (None, None, Some(o)) => Box::new(ObjectIter::new_with_offset(&self.triples, o, op_offset)),
-            (None, None, None) => Box::new(SubjectIter::with_pattern_and_offset(&self.triples, &TripleId::new(0,0,0), op_offset)),
+            (None, Some(p), None) => Box::new(PredicateIter::new(&self.triples, p)),
+            (None, None, Some(o)) => Box::new(ObjectIter::new(&self.triples, o)),
+            (None, None, None) => Box::new(SubjectIter::with_pattern(&self.triples, &TripleId::new(0,0,0))),
         }
     }
 }

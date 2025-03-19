@@ -61,6 +61,10 @@ impl Iterator for ObjectIter<'_> {
         else {(self.max_index - self.pos_index + 1, Some(self.max_index - self.pos_index + 1))}
     }
 
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.pos_index += n;
+        self.next()
+    }
 }
 
 
@@ -82,9 +86,9 @@ mod tests {
         let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
 
         // VVO
-        let count_vvo = hdt.triple_ids_with_pattern_and_offset(None, None, oid, None);
+        let count_vvo = hdt.triple_ids_with_pattern(None, None, oid);
         println!("vvo  estim: {:?}  vs total : {}", count_vvo.size_hint(), count_vvo.count());
-        let skip_vvo = hdt.triple_ids_with_pattern_and_offset(None, None, oid, Some(20));
+        let skip_vvo = hdt.triple_ids_with_pattern(None, None, oid).skip(20);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vvo.size_hint(), skip_vvo.count());
     }
 }

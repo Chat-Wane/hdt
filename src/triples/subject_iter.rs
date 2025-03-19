@@ -105,45 +105,7 @@ impl<'a> SubjectIter<'a> {
         SubjectIter { triples, x, pos_y: min_y, pos_z: min_z, max_y, max_z, search_z }
     }
 
-    /// While building the pattern, allows jumping to an offset efficiently.
-    /// This avoids the need to iterate over every element until reaching the desired
-    /// offset.
-    pub fn with_pattern_and_offset(triples: &'a TriplesBitmap, pat: &TripleId, op_offset: Option<usize>) -> SubjectIter<'a> {
-        let mut base = SubjectIter::with_pattern(triples, pat);
-        match op_offset {
-            None => base, // regular
-            Some(offset) => { // with jump
-                if base.search_z > 0 { // TODO make sure that it can't be skipped
-                    (0..offset).for_each(|_i| {base.next();});
-                    return base;
-                }
-                // comes from:
-                // <https://github.com/rdfhdt/hdt-cpp/blob/d9ae092bb37d9fe85558dfb3edfe0bb6ddddf41a/libhdt/src/triples/BitmapTriplesIterators.cpp#L258>
-                let max_z: usize = triples.adjlist_z.len();
-                assert!(base.pos_z + offset < max_z); // TODO not throw, but be empty ?
-                let pos_z = base.pos_z + offset;
 
-                // BitmapTriplesSearchIterator::goToY
-                let mut pos_y = triples.adjlist_z.bitmap.rank(pos_z - 1) as Id;
-                // let z = triples.adjlist_z.sequence.get(pos_z - 1) as Id;
-                // println!("{}", z);
-                // let y = triples.adjlist_y.sequence.get(pos_y);
-                // println!("{}", y);
-                // TODO if adjlist_y.sequence of no use, we can revert change in triples
-                let x = triples.bitmap_y.rank(pos_y - 1) as Id;
-
-                SubjectIter {
-                    triples,
-                    x,
-                    pos_y,
-                    pos_z,
-                    max_y: base.max_y,
-                    max_z: base.max_z,
-                    search_z: 0,
-                }
-            }
-        }
-    }
 }
 
 impl Iterator for SubjectIter<'_> {
@@ -186,12 +148,23 @@ impl Iterator for SubjectIter<'_> {
         Some(triple_id)
     }
 
+    /// Exact for VVV, SVV, SPV, SPO;
+    /// Approximate for SVO.
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self.search_z {
-            // exact for VVV, SVV, SPV, SPO
             0 => (self.max_z - self.pos_z, Some(self.max_z - self.pos_z)),
             _ => (0, Some(self.max_z- self.pos_z)), // not exact for SVO
         }
+    }
+
+    /// Jumping to an offset efficiently.
+    /// This avoids the need to iterate over every element until reaching the desired
+    /// offset.
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.pos_z += n;
+        self.pos_y = self.triples.adjlist_z.bitmap.rank(self.pos_z - 1);
+        self.x = self.triples.bitmap_y.rank(self.pos_y - 1);
+        self.next()
     }
 }
 
@@ -225,7 +198,7 @@ mod tests {
     fn skip_triples_on_ids() {
         let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
-        let majors = hdt.triple_ids_with_pattern_and_offset(None, None, None, None);
+        let majors = hdt.triple_ids_with_pattern(None, None, None);
 
         println!("{:?}", majors.size_hint());
         let start = Instant::now();
@@ -245,7 +218,7 @@ mod tests {
         // let graph = HdtGraph::new(hdt);
 
         let start = Instant::now();
-        let mut majors = hdt.triple_ids_with_pattern_and_offset(None, None, None, Some(5_000_000));
+        let mut majors = hdt.triple_ids_with_pattern(None, None, None).skip(5_000_000);
         println!("{:?}", majors.next());
         println!("{:?}", start.elapsed());
 
@@ -268,39 +241,34 @@ mod tests {
         let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
 
         // VVV
-        let count_vvv = hdt.triple_ids_with_pattern_and_offset(None, None, None, None);
+        let count_vvv = hdt.triple_ids_with_pattern(None, None, None);
         println!("vvv  estim: {:?}  vs total : {}", count_vvv.size_hint(), count_vvv.count());
-        let skip_vvv = hdt.triple_ids_with_pattern_and_offset(None, None, None, Some(5_000_000));
+        let skip_vvv = hdt.triple_ids_with_pattern(None, None, None).skip(5_000_000);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vvv.size_hint(), skip_vvv.count());
 
         // SVV
-        let count_svv = hdt.triple_ids_with_pattern_and_offset(sid, None, None, None);
+        let count_svv = hdt.triple_ids_with_pattern(sid, None, None);
         println!("svv  estim: {:?} vs total : {}", count_svv.size_hint(), count_svv.count());
-        let skip_svv = hdt.triple_ids_with_pattern_and_offset(sid, None, None, Some(250));
+        let skip_svv = hdt.triple_ids_with_pattern(sid, None, None).skip(20);
         println!("skip estim: {:?} vs actual: {} \n", skip_svv.size_hint(), skip_svv.count());
 
         // SPV
-        let count_spv = hdt.triple_ids_with_pattern_and_offset(sid, pid, None, None);
+        let count_spv = hdt.triple_ids_with_pattern(sid, pid, None);
         println!("spv estim : {:?} vs total : {}", count_spv.size_hint(), count_spv.count());
-        let skip_spv = hdt.triple_ids_with_pattern_and_offset(sid, pid, None, Some(150));
+        let skip_spv = hdt.triple_ids_with_pattern(sid, pid, None).skip(150);
         println!("skip estim: {:?} vs actual: {}\n", skip_spv.size_hint(), skip_spv.count());
 
         // SVO
-        let count_svo = hdt.triple_ids_with_pattern_and_offset(sid, None, oid, None);
+        let count_svo = hdt.triple_ids_with_pattern(sid, None, oid);
         println!("svo estim : {:?} vs total : {}", count_svo.size_hint(), count_svo.count());
-        let skip_svo = hdt.triple_ids_with_pattern_and_offset(sid, None, oid, Some(1));
+        let skip_svo = hdt.triple_ids_with_pattern(sid, None, oid).skip(20);
         println!("skip estim: {:?} vs actual: {}\n", skip_svo.size_hint(), skip_svo.count());
 
         // SPO
-        let count_spo = hdt.triple_ids_with_pattern_and_offset(sid, pid, oid, None);
+        let count_spo = hdt.triple_ids_with_pattern(sid, pid, oid);
         println!("spo estim : {:?} vs total : {}", count_spo.size_hint(), count_spo.count());
-        let skip_spo = hdt.triple_ids_with_pattern_and_offset(sid, pid, oid, Some(1));
+        let mut skip_spo = hdt.triple_ids_with_pattern(sid, pid, oid).skip(1);
         println!("skip estim: {:?} vs actual: {}", skip_spo.size_hint(), skip_spo.count());
-
     }
 
-    #[test]
-    fn skip_over_the_max () {
-        todo!()
-    }
 }

@@ -22,23 +22,12 @@ impl<'a> PredicateIter<'a> {
         //println!("the predicate {} is used by {} subjects in the index", p, occs);
         PredicateIter { triples, p, i: 0, pos_z: 0, os: 0, s: 0, occs }
     }
-
-    /// Iterator for VPV that optionally skips to the offset. However,
-    /// there are no efficient way to jump immediately to the designated offset.
-    pub fn new_with_offset(triples: &'a TriplesBitmap, p: Id, op_offset: Option<usize>) -> Self {
-        match op_offset {
-            None => PredicateIter::new(triples, p),
-            Some(offset) => { // TODO double check that it cannot be efficiently skipped
-                let mut base = PredicateIter::new(triples, p);
-                base.nth(offset.saturating_sub(1));
-                base
-            },
-        }
-    }
 }
+
 
 impl Iterator for PredicateIter<'_> {
     type Item = TripleId;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.i >= self.occs {
             return None;
@@ -71,6 +60,10 @@ impl Iterator for PredicateIter<'_> {
         // so we don't know the upper bound.
         (self.occs, None)
     }
+
+    // Iterator for VPV that optionally skips to the offset. However,
+    // there are no efficient way to jump immediately to the designated offset.
+    // so `fn nth` not override, since the default is the actual best implem'.
 }
 
 
@@ -80,7 +73,6 @@ mod tests {
 
     #[test]
     fn skip_on_vpv() {
-        // todo
         let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
 
@@ -88,9 +80,9 @@ mod tests {
         let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
 
         // VPV
-        let count_vpv = hdt.triple_ids_with_pattern_and_offset(None, pid, None, None);
+        let count_vpv = hdt.triple_ids_with_pattern(None, pid, None);
         println!("vpv  estim: {:?}  vs total : {}", count_vpv.size_hint(), count_vpv.count());
-        let skip_vpv = hdt.triple_ids_with_pattern_and_offset(None, pid, None, Some(2_000_000));
+        let skip_vpv = hdt.triple_ids_with_pattern(None, pid, None).skip(2_000_000);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vpv.size_hint(), skip_vpv.count());
     }
 }
