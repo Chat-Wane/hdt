@@ -180,56 +180,47 @@ mod tests {
     use sophia::api::graph::Graph;
     use sophia::api::prelude::Any;
     use std::time::Instant;
+    use log::debug;
 
+    #[ignore]
     #[test]
-    fn skip_triples_old_school() {
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+    fn performance_check_on_larger_file() {
+        // TODO could be downloaded conditionally
+        // the file can be found on https://zenodo.org/records/13734676/files/watdiv.10M.hdt
+        let file = std::fs::File::open("../datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
         let graph = HdtGraph::new(hdt);
-        let majors = graph.triples_matching(Any,Any,Any);
+        let all_triples = graph.triples_matching(Any, Any, Any);
+        const SKIP: usize = 5_000_000;
 
-        println!("{:?}", majors.size_hint());
-        let start = Instant::now();
-        let mut skipped = majors.skip(5_000_000);
-        println!("{:?}", skipped.next());
-        println!("{:?}", start.elapsed());
-
+        // #1 check the time of triples with their actual value
+        let start_triples = Instant::now();
+        let mut skipped = all_triples.skip(SKIP);
+        println!("To avoid laziness, here is the element after skip: {:?}", skipped.next());
+        println!("Took {:?} to skip {SKIP} elements.", start_triples.elapsed());
         let start_count = Instant::now();
-        println!("{}", skipped.count());
-        println!("{:?}", start_count.elapsed());
-    }
+        println!("We count the rest of the elements: {}", skipped.count());
+        println!("Took {:?} to count the rest.", start_count.elapsed());
+        // The order of magnitude is second
 
-    #[test]
-    fn skip_triples_on_ids() {
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
-        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
-        let majors = hdt.triple_ids_with_pattern(None, None, None);
 
-        println!("{:?}", majors.size_hint());
-        let start = Instant::now();
-        let mut skipped = majors.skip(5_000_000);
-        println!("{:?}", skipped.next());
-        println!("{:?}", start.elapsed());
+        // #2 check the time of counting on triple identifiers only
+        let triple_ids = graph.hdt.triple_ids_with_pattern(None, None, None);
+        let start_count_triples_ids = Instant::now();
+        println!("We count the number of elements {}.", triple_ids.count());
+        println!("Took {:?} to count.", start_count_triples_ids.elapsed());
+        // The order of magnitude is milliseconds!
 
-        let start_count = Instant::now();
-        println!("{}", skipped.count());
-        println!("{:?}", start_count.elapsed());
-    }
-
-    #[test]
-    fn efficient_skip_triples() { // VVV
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
-        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
-        // let graph = HdtGraph::new(hdt);
-
-        let start = Instant::now();
-        let mut majors = hdt.triple_ids_with_pattern(None, None, None).skip(5_000_000);
-        println!("{:?}", majors.next());
-        println!("{:?}", start.elapsed());
-
-        let start_count = Instant::now();
-        println!("{}", majors.count());
-        println!("{:?}", start_count.elapsed());
+        // #3 skip on triple identifiers
+        let start_triple_ids = Instant::now();
+        let mut triples_ids_to_skip = graph.hdt.triple_ids_with_pattern(None, None, None).skip(SKIP);
+        println!("To avoid laziness, here is the element after skip: {:?}", triples_ids_to_skip.next());
+        println!("Took {:?} to skip {SKIP} elements.", start_triple_ids.elapsed());
+        // The order of magnitude is microsecond!!
+        let start_count_rest_ids = Instant::now();
+        println!("We count the rest of the elements: {}", triples_ids_to_skip.count());
+        println!("Took {:?} to count the rest.", start_count_rest_ids.elapsed());
+        // The rest is half the time of previous count obviously
     }
 
     #[test]
