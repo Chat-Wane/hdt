@@ -70,19 +70,18 @@ impl Iterator for ObjectIter<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::triples::subject_iter::tests::{assert_exact_cardinality_of_pattern, assert_number_of_remaining_elements_after_skip};
     use crate::{Hdt, IdKind};
 
+    #[ignore]
     #[test]
-    fn skip_on_vvo() {
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+    fn skip_on_vvo_on_larger_file() {
+        // TODO could be downloaded conditionally
+        // the file can be found on https://zenodo.org/records/13734676/files/watdiv.10M.hdt
+        let file = std::fs::File::open("tests/resources/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
 
-        let s = "http://db.uwaterloo.ca/~galuc/wsdbm/User44276".into();
-        let p = "http://db.uwaterloo.ca/~galuc/wsdbm/friendOf".into();
         let o = "http://db.uwaterloo.ca/~galuc/wsdbm/User69629".into();
-
-        let sid = Some(hdt.dict.string_to_id(s, &IdKind::Subject));
-        let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
         let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
 
         // VVO
@@ -90,5 +89,19 @@ mod tests {
         println!("vvo  estim: {:?}  vs total : {}", count_vvo.size_hint(), count_vvo.count());
         let skip_vvo = hdt.triple_ids_with_pattern(None, None, oid).skip(20);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vvo.size_hint(), skip_vvo.count());
+    }
+
+    #[test]
+    fn skip_on_vvo_should_count_the_remaining_and_cardinality_is_exact() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let o = "http://www.snik.eu/ontology/meta/EntityType".into();
+        let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
+
+        assert_exact_cardinality_of_pattern(&hdt, None, None, oid); // 20 triples
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, oid, 0);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, oid, 13);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, oid, 1000);
     }
 }

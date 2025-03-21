@@ -69,11 +69,15 @@ impl Iterator for PredicateIter<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::triples::subject_iter::tests::{assert_consistent_cardinality_of_pattern, assert_number_of_remaining_elements_after_skip};
     use crate::{Hdt, IdKind};
 
+    #[ignore]
     #[test]
-    fn skip_on_vpv() {
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+    fn skip_on_vpv_on_larger_file() {
+        // TODO could be downloaded conditionally
+        // the file can be found on https://zenodo.org/records/13734676/files/watdiv.10M.hdt
+        let file = std::fs::File::open("/tests/resources/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
 
         let p = "http://db.uwaterloo.ca/~galuc/wsdbm/friendOf".into();
@@ -84,5 +88,20 @@ mod tests {
         println!("vpv  estim: {:?}  vs total : {}", count_vpv.size_hint(), count_vpv.count());
         let skip_vpv = hdt.triple_ids_with_pattern(None, pid, None).skip(2_000_000);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vpv.size_hint(), skip_vpv.count());
+    }
+
+    #[test]
+    fn skip_on_vpv_not_efficient_nor_exact_cardinality() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let p = "http://www.w3.org/2000/01/rdf-schema#range".into();
+        let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
+
+        assert_consistent_cardinality_of_pattern(&hdt, None, pid, None); // 33 triples
+        // still checking skip, even though not efficient
+        assert_number_of_remaining_elements_after_skip(&hdt, None, pid, None, 0);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, pid, None, 10);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, pid, None, 1000);
     }
 }

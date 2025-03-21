@@ -164,6 +164,9 @@ impl Iterator for SubjectIter<'_> {
         match self.search_z {
             0 => { // Efficient for VVV, SVV, SPV
                 self.pos_z += n;
+                if self.pos_z > self.max_z { // prevents getting out of bound
+                    self.pos_z = self.max_z;
+                }
                 self.pos_y = self.triples.adjlist_z.bitmap.rank(self.pos_z -1);
                 self.x = self.triples.bitmap_y.rank(self.pos_y -1);
             },
@@ -175,19 +178,19 @@ impl Iterator for SubjectIter<'_> {
 
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use crate::triples::Id;
     use crate::{Hdt, HdtGraph, IdKind};
     use sophia::api::graph::Graph;
     use sophia::api::prelude::Any;
     use std::time::Instant;
-    use log::debug;
 
     #[ignore]
     #[test]
     fn performance_check_on_larger_file() {
         // TODO could be downloaded conditionally
         // the file can be found on https://zenodo.org/records/13734676/files/watdiv.10M.hdt
-        let file = std::fs::File::open("../datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+        let file = std::fs::File::open("/tests/resources/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
         let graph = HdtGraph::new(hdt);
         let all_triples = graph.triples_matching(Any, Any, Any);
@@ -223,9 +226,11 @@ mod tests {
         // The rest is half the time of previous count obviously
     }
 
+    #[ignore]
     #[test]
     fn skip_on_subject_iterators() {
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+        // TODO again, could be downloaded conditionally
+        let file = std::fs::File::open("/tests/resources/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
 
         let s = "http://db.uwaterloo.ca/~galuc/wsdbm/User44276".into();
@@ -236,35 +241,144 @@ mod tests {
         let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
         let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
 
-        // VVV
         let count_vvv = hdt.triple_ids_with_pattern(None, None, None);
         println!("vvv  estim: {:?}  vs total : {}", count_vvv.size_hint(), count_vvv.count());
         let skip_vvv = hdt.triple_ids_with_pattern(None, None, None).skip(5_000_000);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vvv.size_hint(), skip_vvv.count());
 
-        // SVV
         let count_svv = hdt.triple_ids_with_pattern(sid, None, None);
         println!("svv  estim: {:?} vs total : {}", count_svv.size_hint(), count_svv.count());
         let skip_svv = hdt.triple_ids_with_pattern(sid, None, None).skip(20);
         println!("skip estim: {:?} vs actual: {} \n", skip_svv.size_hint(), skip_svv.count());
 
-        // SPV
         let count_spv = hdt.triple_ids_with_pattern(sid, pid, None);
         println!("spv estim : {:?} vs total : {}", count_spv.size_hint(), count_spv.count());
         let skip_spv = hdt.triple_ids_with_pattern(sid, pid, None).skip(150);
         println!("skip estim: {:?} vs actual: {}\n", skip_spv.size_hint(), skip_spv.count());
 
-        // SVO
         let count_svo = hdt.triple_ids_with_pattern(sid, None, oid);
         println!("svo estim : {:?} vs total : {}", count_svo.size_hint(), count_svo.count());
         let skip_svo = hdt.triple_ids_with_pattern(sid, None, oid).skip(1);
         println!("skip estim: {:?} vs actual: {}\n", skip_svo.size_hint(), skip_svo.count());
 
-        // SPO
         let count_spo = hdt.triple_ids_with_pattern(sid, pid, oid);
         println!("spo estim : {:?} vs total : {}", count_spo.size_hint(), count_spo.count());
-        let mut skip_spo = hdt.triple_ids_with_pattern(sid, pid, oid).skip(1);
+        let skip_spo = hdt.triple_ids_with_pattern(sid, pid, oid).skip(1);
         println!("skip estim: {:?} vs actual: {}", skip_spo.size_hint(), skip_spo.count());
+    }
+
+    #[test]
+    fn skip_on_vvv_should_count_the_remaining_and_cardinality_is_exact() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        assert_exact_cardinality_of_pattern(&hdt, None, None, None);
+        // 328 triples in the dataset!
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, None, 000);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, None, 100);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, None, 200);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, None, 300);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, None, None, 100_000);
+    }
+
+    #[test]
+    fn skip_on_svv_should_count_the_remaining_and_cardinality_is_exact() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let s1 = "http://www.snik.eu/ontology/meta".into();
+        let s2 = "http://www.snik.eu/ontology/meta/ApplicationComponent".into();
+        let s3 = "http://www.snik.eu/ontology/meta/book".into();
+
+        let sid1 = Some(hdt.dict.string_to_id(s1, &IdKind::Subject));
+        let sid2 = Some(hdt.dict.string_to_id(s2, &IdKind::Subject));
+        let sid3 = Some(hdt.dict.string_to_id(s3, &IdKind::Subject));
+
+        assert_exact_cardinality_of_pattern(&hdt, sid1, None, None); // 65 triples
+        assert_exact_cardinality_of_pattern(&hdt, sid2, None, None); // 3 triples
+        assert_exact_cardinality_of_pattern(&hdt, sid3, None, None); // 6 triples
+
+        assert_number_of_remaining_elements_after_skip(&hdt, sid1, None, None, 10);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid2, None, None, 12);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid3, None, None, 1);
+    }
+
+    #[test]
+    fn skip_on_spv_should_count_the_remaining_and_cardinality_is_exact() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let s1 = "http://www.snik.eu/ontology/meta".into();
+        let p1 = "http://open.vocab.org/terms/defines".into();
+        let p2 = "http://purl.org/dc/terms/creator".into();
+
+        let sid1 = Some(hdt.dict.string_to_id(s1, &IdKind::Subject));
+        let pid1 = Some(hdt.dict.string_to_id(p1, &IdKind::Predicate));
+        let pid2 = Some(hdt.dict.string_to_id(p2, &IdKind::Predicate));
+
+        assert_exact_cardinality_of_pattern(&hdt, sid1, pid1, None); // 44 triples
+        assert_exact_cardinality_of_pattern(&hdt, sid1, pid2, None); // 7 triples
+
+        assert_number_of_remaining_elements_after_skip(&hdt, sid1, pid1, None, 10);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid1, pid1, None, 20);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid1, pid2, None, 2);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid1, pid2, None, 1000);
+    }
+
+    #[test]
+    fn skip_on_svo_not_efficient_nor_cardinality_exact_but_we_have_higher_bound() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let s = "http://www.snik.eu/ontology/meta".into();
+        let o = "http://www.snik.eu".into();
+        let sid = Some(hdt.dict.string_to_id(s, &IdKind::Subject));
+        let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
+
+        assert_consistent_cardinality_of_pattern(&hdt, sid, None, oid); // 3 triples
+        // still checking on skip even though it's not efficient
+        assert_number_of_remaining_elements_after_skip(&hdt, sid, None, oid, 0);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid, None, oid, 2);
+        assert_number_of_remaining_elements_after_skip(&hdt, sid, None, oid, 10);
+    }
+
+    /// Checks if the cardinality estimation on the targeted triple pattern provides the exact
+    /// number of elements of this pattern in the hdt database.
+    pub fn assert_exact_cardinality_of_pattern(hdt: &Hdt, s: Option<Id>, p: Option<Id>, o: Option<Id>) {
+        let count_it = hdt.triple_ids_with_pattern(s, p, o);
+        let estimate = count_it.size_hint();
+        let actual_count = count_it.count();
+        assert_eq!(actual_count, estimate.0);
+        assert_eq!(actual_count, estimate.1.unwrap());
+    }
+
+    /// Checks if the cardinality estimation is consistent with the actual
+    /// number of triples for the triple pattern.
+    pub fn assert_consistent_cardinality_of_pattern(hdt: &Hdt, s: Option<Id>, p: Option<Id>, o: Option<Id>) {
+        let count_it = hdt.triple_ids_with_pattern(s, p, o);
+        let estimate = count_it.size_hint();
+        let actual_count = count_it.count();
+        assert!(estimate.0 <= actual_count);
+        match estimate.1 {
+            Some(higher) => assert!(actual_count <= higher),
+            None => {},
+        }
+    }
+
+    /// Checks if the number of element after skip is consistent with the actual number
+    /// of elements in the targeted pattern.
+    pub fn assert_number_of_remaining_elements_after_skip(hdt: &Hdt, s: Option<Id>, p: Option<Id>, o: Option<Id>, skip: usize) {
+        let count_it = hdt.triple_ids_with_pattern(s, p, o);
+        let actual_count = count_it.count();
+        let start = Instant::now();
+        let skipped_it = hdt.triple_ids_with_pattern(s, p, o).skip(skip);
+        let count_after_skip = skipped_it.count();
+        if skip < actual_count {
+            assert!(skip < actual_count && count_after_skip > 0); // just to make sure that we actually skip something
+            assert_eq!(actual_count, count_after_skip + skip);
+        } else {
+            assert_eq!(0, count_after_skip);
+        }
     }
 
 }

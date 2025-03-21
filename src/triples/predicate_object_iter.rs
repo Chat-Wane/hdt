@@ -65,16 +65,6 @@ impl<'a> PredicateObjectIter<'a> {
         PredicateObjectIter { triples, pos_index: 999, max_index: 0 }
     }
 
-    pub fn new_with_offset(triples: &'a TriplesBitmap, p: Id, o: Id, op_offset: Option<usize>) -> Self {
-        match op_offset {
-            None => PredicateObjectIter::new(triples, p, o),
-            Some(offset) => {
-                let mut base = PredicateObjectIter::new(triples, p, o);
-                base.pos_index += offset; // as if we called `next` offset times
-                base
-            }
-        }
-    }
 }
 
 impl Iterator for PredicateObjectIter<'_> {
@@ -107,18 +97,19 @@ impl Iterator for PredicateObjectIter<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::triples::subject_iter::tests::*;
     use crate::{Hdt, IdKind};
 
+    #[ignore]
     #[test]
-    fn skip_on_vpo() {
-        let file = std::fs::File::open("/Users/skoazell/Desktop/Projects/datasets/watdiv10m-hdt/watdiv.10M.hdt").expect("error opening file");
+    fn skip_on_vpo_on_larger_file() {
+        // TODO could be downloaded conditionally
+        // the file can be found on https://zenodo.org/records/13734676/files/watdiv.10M.hdt
+        let file = std::fs::File::open("/tests/resources/watdiv.10M.hdt").expect("error opening file");
         let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
 
-        let s = "http://db.uwaterloo.ca/~galuc/wsdbm/User44276".into();
         let p = "http://db.uwaterloo.ca/~galuc/wsdbm/friendOf".into();
         let o = "http://db.uwaterloo.ca/~galuc/wsdbm/User69629".into();
-
-        let sid = Some(hdt.dict.string_to_id(s, &IdKind::Subject));
         let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
         let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
 
@@ -127,5 +118,21 @@ mod tests {
         println!("vpo  estim: {:?}  vs total : {}", count_vpo.size_hint(), count_vpo.count());
         let skip_vpo = hdt.triple_ids_with_pattern(None, pid, oid).skip(20);
         println!("skip estim: {:?}  vs actual: {}\n", skip_vpo.size_hint(), skip_vpo.count());
+    }
+
+    #[test]
+    fn skip_on_vpo_should_count_the_remaining_and_cardinality_is_exact() {
+        let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+
+        let p = "http://www.w3.org/2000/01/rdf-schema#range".into();
+        let o = "http://www.snik.eu/ontology/meta/EntityType".into();
+        let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
+        let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
+
+        assert_exact_cardinality_of_pattern(&hdt, None, pid, oid); // 10 triples
+        assert_number_of_remaining_elements_after_skip(&hdt, None, pid, oid, 0);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, pid, oid, 7);
+        assert_number_of_remaining_elements_after_skip(&hdt, None, pid, oid, 1000);
     }
 }

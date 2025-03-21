@@ -425,4 +425,26 @@ mod tests {
         let triple_vec = vec![(Arc::from(s), Arc::from(p), Arc::from(o))];
         assert_eq!(triple_vec, hdt.triples_with_pattern(Some(s), Some(p), None).collect::<Vec<_>>(),);
     }
+
+    #[test]
+    fn trying_to_retrieve_triple_ids_from_triple_patterns_that_match_nothing() {
+        let file = File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let hdt = Hdt::new(std::io::BufReader::new(file)).expect("error loading HDT");
+        // here, s, o, and p exist, but the triple (s,p,o) does not
+        let s = "http://www.snik.eu/ontology/meta/increases".into();
+        let p = "http://purl.org/vocab/vann/preferredNamespacePrefix".into();
+        let o = "http://www.snik.eu/ontology/meta/Top".into();
+        let sid = Some(hdt.dict.string_to_id(s, &IdKind::Subject));
+        let pid = Some(hdt.dict.string_to_id(p, &IdKind::Predicate));
+        let oid = Some(hdt.dict.string_to_id(o, &IdKind::Object));
+
+        let it_spo = hdt.triple_ids_with_pattern(sid, pid, oid);
+        assert_eq!(0, it_spo.count());
+        let it_svo = hdt.triple_ids_with_pattern(sid, None, oid);
+        assert_eq!(0, it_svo.count());
+        let it_spv = hdt.triple_ids_with_pattern(sid, pid, None);
+        assert_eq!(0, it_spv.count());
+        let it_vpo = hdt.triple_ids_with_pattern(None, pid, oid);
+        assert_eq!(0, it_vpo.count());
+    }
 }
