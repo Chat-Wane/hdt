@@ -161,18 +161,11 @@ impl Graph for HdtGraph {
         O: TermMatcher + 's,
     {
         use HdtMatcher::{Constant, Other};
-        let xso = match self.unpack_matcher(&sm, &IdKind::Subject) {
-            None => return Box::new(iter::empty()) as Box<dyn Iterator<Item = _>>,
-            Some(x) => x,
+        let Some(xso) = self.unpack_matcher(&sm, &IdKind::Subject) else {
+            return Box::new(iter::empty()) as Box<dyn Iterator<Item = _>>;
         };
-        let xpo = match self.unpack_matcher(&pm, &IdKind::Predicate) {
-            None => return Box::new(iter::empty()),
-            Some(x) => x,
-        };
-        let xoo = match self.unpack_matcher(&om, &IdKind::Object) {
-            None => return Box::new(iter::empty()),
-            Some(x) => x,
-        };
+        let Some(xpo) = self.unpack_matcher(&pm, &IdKind::Predicate) else { return Box::new(iter::empty()) };
+        let Some(xoo) = self.unpack_matcher(&om, &IdKind::Object) else { return Box::new(iter::empty()) };
         // TODO: improve error handling
         match (xso, xpo, xoo) {
             //if SubjectIter::with_pattern(&self.hdt.triples, &TripleId::new(s.1, p.1, o.1)).next().is_some() { // always true
@@ -241,15 +234,15 @@ impl Graph for HdtGraph {
 mod tests {
     use super::*;
     use crate::tests::init;
+    use fs_err::File;
     use sophia::api::prelude::Triple;
     use sophia::api::term::matcher::Any;
-    use std::fs::File;
 
     #[test]
-    fn test_graph() {
+    fn test_graph() -> color_eyre::Result<()> {
         init();
-        let file = File::open("tests/resources/snikmeta.hdt").expect("error opening file");
-        let hdt = Hdt::new(std::io::BufReader::new(file)).unwrap();
+        let file = File::open("tests/resources/snikmeta.hdt")?;
+        let hdt = Hdt::read(std::io::BufReader::new(file))?;
         let graph = HdtGraph::new(hdt);
         let triples: Vec<Result<[HdtTerm; 3], Infallible>> = graph.triples().collect();
         assert_eq!(triples.len(), 328);
@@ -360,12 +353,6 @@ mod tests {
                 .map(Result::unwrap)
                 .collect::<Vec<_>>()
         );
-        /*
-        let testo = &SimpleTerm::from(LiteralDatatype(
-            "testo",
-            Iri::<&str>::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
-        ));
-        assert!(graph.triples_matching(testo).count() == 1);
-        */
+        Ok(())
     }
 }

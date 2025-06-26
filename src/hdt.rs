@@ -1,26 +1,26 @@
-use crate::containers::ControlInfo;
-use crate::four_sect_dict::{DictErr, IdKind};
-use crate::header::Header;
-use crate::triples::{Id, ObjectIter, PredicateIter, PredicateObjectIter, SubjectIter, TripleId, TriplesBitmap};
 use crate::FourSectDict;
+use crate::containers::{ControlInfo, control_info};
+use crate::four_sect_dict::{DictError, DictReadError, IdKind};
+use crate::triples::{Id, ObjectIter, PredicateIter, PredicateObjectIter, SubjectIter, TripleId, TriplesBitmap};
+use crate::{header, header::Header};
 use bytesize::ByteSize;
-use eyre::WrapErr;
 use log::{debug, error};
-use std::error::Error;
 #[cfg(feature = "cache")]
 use std::fs::File;
 #[cfg(feature = "cache")]
 use std::io::{Seek, SeekFrom, Write};
 use std::iter;
 use std::sync::Arc;
-use thiserror::Error;
+
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// In-memory representation of an RDF graph loaded from an HDT file.
 /// Allows queries by triple patterns.
 #[derive(Debug)]
 pub struct Hdt {
     //global_ci: ControlInfo,
-    //header: Header,
+    // header is not necessary for querying but shouldn't waste too much space and we need it for writing in the future, may also make it optional
+    header: Header,
     /// in-memory representation of dictionary
     pub dict: FourSectDict,
     /// in-memory representation of triples
@@ -30,15 +30,35 @@ pub struct Hdt {
 type StringTriple = (Arc<str>, Arc<str>, Arc<str>);
 
 /// The error type for the `translate_id` method.
-#[derive(Error, Debug)]
-#[error("Cannot translate triple ID {t:?} to string triple: {e}")]
-pub struct TranslateErr {
+#[derive(thiserror::Error, Debug)]
+#[error("cannot translate triple ID {t:?} to string triple: {e}")]
+pub struct TranslateError {
     #[source]
-    e: DictErr,
+    e: DictError,
     t: TripleId,
 }
 
+/// The error type for the `new` method.
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("failed to read HDT control info")]
+    ControlInfo(#[from] control_info::Error),
+    #[error("failed to read HDT header")]
+    Header(#[from] header::Error),
+    #[error("failed to read HDT four section dictionary")]
+    FourSectDict(#[from] DictReadError),
+    #[error("failed to read HDT triples section")]
+    Triples(#[from] crate::triples::Error),
+    #[error("failed to validate HDT dictionary")]
+    DictionaryValidationErrorTodo(#[from] std::io::Error),
+}
+
 impl Hdt {
+    #[deprecated(since = "0.4.0", note = "please use `read` instead")]
+    pub fn new<R: std::io::BufRead>(reader: R) -> Result<Self> {
+        Self::read(reader)
+    }
+
     /// Creates an immutable HDT instance containing the dictionary and triples from the given reader.
     /// The reader must point to the beginning of the data of an HDT file as produced by hdt-cpp.
     /// FourSectionDictionary with DictionarySectionPlainFrontCoding and SPO order is the only supported implementation.
@@ -49,13 +69,13 @@ impl Hdt {
     /// let file = std::fs::File::open("tests/resources/snikmeta.hdt").expect("error opening file");
     /// let hdt = hdt::Hdt::new(std::io::BufReader::new(file)).unwrap();
     /// ```
-    pub fn new<R: std::io::BufRead>(mut reader: R) -> Result<Self, Box<dyn Error>> {
-        ControlInfo::read(&mut reader).wrap_err("Failed to read HDT control info")?;
-        Header::read(&mut reader).wrap_err("Failed to read HDT header")?;
-        let unvalidated_dict = FourSectDict::read(&mut reader).wrap_err("Failed to read HDT dictionary")?;
-        let triples = TriplesBitmap::read_sect(&mut reader).wrap_err("Failed to read HDT triples section")?;
+    pub fn read<R: std::io::BufRead>(mut reader: R) -> Result<Self> {
+        ControlInfo::read(&mut reader)?;
+        let header = Header::read(&mut reader)?;
+        let unvalidated_dict = FourSectDict::read(&mut reader)?;
+        let triples = TriplesBitmap::read_sect(&mut reader)?;
         let dict = unvalidated_dict.validate()?;
-        let hdt = Hdt { dict, triples };
+        let hdt = Hdt { header, dict, triples };
         debug!("HDT size in memory {}, details:", ByteSize(hdt.size_in_bytes() as u64));
         debug!("{hdt:#?}");
         Ok(hdt)
@@ -72,14 +92,14 @@ impl Hdt {
     /// let hdt = hdt::Hdt::new_from_path(std::path::Path::new("tests/resources/snikmeta.hdt")).unwrap();
     /// ```
     #[cfg(feature = "cache")]
-    pub fn new_from_path(f: &std::path::Path) -> Result<Self, Box<dyn Error>> {
+    pub fn new_from_path(f: &std::path::Path) -> Result<Self> {
         use log::warn;
 
         let source = File::open(f)?;
         let mut reader = std::io::BufReader::new(source);
-        ControlInfo::read(&mut reader).wrap_err("Failed to read HDT control info")?;
-        Header::read(&mut reader).wrap_err("Failed to read HDT header")?;
-        let unvalidated_dict = FourSectDict::read(&mut reader).wrap_err("Failed to read HDT dictionary")?;
+        ControlInfo::read(&mut reader)?;
+        let header = Header::read(&mut reader)?;
+        let unvalidated_dict = FourSectDict::read(&mut reader)?;
         let mut abs_path = std::fs::canonicalize(f)?;
         let _ = abs_path.pop();
         let index_file_name = format!("{}.index.v1-rust-cache", f.file_name().unwrap().to_str().unwrap());
@@ -99,7 +119,7 @@ impl Hdt {
         };
 
         let dict = unvalidated_dict.validate()?;
-        let hdt = Hdt { dict, triples };
+        let hdt = Hdt { header, dict, triples };
         debug!("HDT size in memory {}, details:", ByteSize(hdt.size_in_bytes() as u64));
         debug!("{hdt:#?}");
         Ok(hdt)
@@ -108,21 +128,22 @@ impl Hdt {
     #[cfg(feature = "cache")]
     fn load_without_cache<R: std::io::BufRead>(
         mut reader: R, index_file_path: &std::path::PathBuf,
-    ) -> core::result::Result<TriplesBitmap, Box<dyn Error>> {
+    ) -> Result<TriplesBitmap> {
         use log::warn;
 
         debug!("no cache detected, generating index");
-        let triples = TriplesBitmap::read_sect(&mut reader).wrap_err("Failed to read HDT triples section")?;
+        let triples = TriplesBitmap::read_sect(&mut reader)?;
         debug!("index generated, saving cache to {}", index_file_path.display());
         if let Err(e) = Self::write_cache(index_file_path, &triples) {
             warn!("error trying to save cache to file: {e}");
         }
         Ok(triples)
     }
+
     #[cfg(feature = "cache")]
     fn load_with_cache<R: std::io::BufRead>(
         mut reader: R, index_file_path: &std::path::PathBuf,
-    ) -> core::result::Result<TriplesBitmap, Box<dyn Error>> {
+    ) -> core::result::Result<TriplesBitmap, Box<dyn std::error::Error>> {
         // load cached index
         debug!("hdt file cache detected, loading from {}", index_file_path.display());
         let index_source = File::open(index_file_path)?;
@@ -134,11 +155,20 @@ impl Hdt {
     #[cfg(feature = "cache")]
     fn write_cache(
         index_file_path: &std::path::PathBuf, triples: &TriplesBitmap,
-    ) -> core::result::Result<(), Box<dyn Error>> {
+    ) -> core::result::Result<(), Box<dyn std::error::Error>> {
         let new_index_file = File::create(index_file_path)?;
         let mut writer = std::io::BufWriter::new(new_index_file);
-        bincode::serde::encode_into_std_write(&triples, &mut writer, bincode::config::standard())?;
+        bincode::serde::encode_into_std_write(triples, &mut writer, bincode::config::standard())?;
         writer.flush()?;
+        Ok(())
+    }
+
+    pub fn write(&self, write: &mut impl std::io::Write) -> Result<()> {
+        ControlInfo::global().write(write)?;
+        self.header.write(write)?;
+        self.dict.write(write)?;
+        self.triples.write(write)?;
+        write.flush()?;
         Ok(())
     }
 
@@ -325,30 +355,32 @@ impl<'a> TripleCache<'a> {
     }
 
     /// Get the string representation of the subject `sid`.
-    pub fn get_s_string(&mut self, sid: usize) -> Result<Arc<str>, DictErr> {
+    pub fn get_s_string(&mut self, sid: usize) -> core::result::Result<Arc<str>, DictError> {
         self.get_x_string(sid, 0, &IdKind::Subject)
     }
 
     /// Get the string representation of the predicate `pid`.
-    pub fn get_p_string(&mut self, pid: usize) -> Result<Arc<str>, DictErr> {
+    pub fn get_p_string(&mut self, pid: usize) -> core::result::Result<Arc<str>, DictError> {
         self.get_x_string(pid, 1, &IdKind::Predicate)
     }
 
     /// Get the string representation of the object `oid`.
-    pub fn get_o_string(&mut self, oid: usize) -> Result<Arc<str>, DictErr> {
+    pub fn get_o_string(&mut self, oid: usize) -> core::result::Result<Arc<str>, DictError> {
         self.get_x_string(oid, 2, &IdKind::Object)
     }
 
     /// Translate a triple of indexes into a triple of strings.
-    pub fn translate(&mut self, t: TripleId) -> Result<StringTriple, TranslateErr> {
+    pub fn translate(&mut self, t: TripleId) -> core::result::Result<StringTriple, TranslateError> {
         Ok((
-            self.get_s_string(t.subject_id).map_err(|e| TranslateErr { e, t })?,
-            self.get_p_string(t.predicate_id).map_err(|e| TranslateErr { e, t })?,
-            self.get_o_string(t.object_id).map_err(|e| TranslateErr { e, t })?,
+            self.get_s_string(t.subject_id).map_err(|e| TranslateError { e, t })?,
+            self.get_p_string(t.predicate_id).map_err(|e| TranslateError { e, t })?,
+            self.get_o_string(t.object_id).map_err(|e| TranslateError { e, t })?,
         ))
     }
 
-    fn get_x_string(&mut self, i: usize, pos: usize, kind: &'static IdKind) -> Result<Arc<str>, DictErr> {
+    fn get_x_string(
+        &mut self, i: usize, pos: usize, kind: &'static IdKind,
+    ) -> core::result::Result<Arc<str>, DictError> {
         debug_assert!(i != 0);
         if self.idx[pos] == i {
             Ok(self.arc[pos].as_ref().unwrap().clone())
@@ -365,15 +397,25 @@ impl<'a> TripleCache<'a> {
 mod tests {
     use super::*;
     use crate::tests::init;
+    use color_eyre::Result;
+    use fs_err::File;
     use pretty_assertions::{assert_eq, assert_ne};
-    use std::fs::File;
 
     #[test]
-    fn triples() {
+    fn write() -> Result<()> {
         init();
         let filename = "tests/resources/snikmeta.hdt";
-        let file = File::open(filename).expect("error opening file");
-        let hdt = Hdt::new(std::io::BufReader::new(file)).unwrap();
+        let file = File::open(filename)?;
+        let hdt = Hdt::read(std::io::BufReader::new(file))?;
+        triples(&hdt)?;
+        let mut buf = Vec::<u8>::new();
+        hdt.write(&mut buf)?;
+        let hdt2 = Hdt::read(std::io::Cursor::new(buf))?;
+        triples(&hdt2)?;
+        Ok(())
+    }
+
+    fn triples(hdt: &Hdt) -> Result<()> {
         let triples = hdt.triples();
         let v: Vec<StringTriple> = triples.collect();
         assert_eq!(v.len(), 328);
@@ -424,6 +466,7 @@ mod tests {
         let o = "\"ХОББИ\"@ru";
         let triple_vec = vec![(Arc::from(s), Arc::from(p), Arc::from(o))];
         assert_eq!(triple_vec, hdt.triples_with_pattern(Some(s), Some(p), None).collect::<Vec<_>>(),);
+        Ok(())
     }
 
     #[test]

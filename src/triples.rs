@@ -1,7 +1,6 @@
 use crate::ControlInfo;
-use crate::containers::{AdjList, Bitmap, Sequence};
+use crate::containers::{AdjList, Bitmap, Sequence, bitmap, control_info, sequence};
 use bytesize::ByteSize;
-use eyre::{Result, WrapErr, eyre};
 use log::{debug, error};
 use std::cmp::Ordering;
 use std::fmt;
@@ -24,13 +23,16 @@ pub use object_iter::ObjectIter;
 #[cfg(feature = "cache")]
 use serde::ser::SerializeStruct;
 
+pub type Result<T> = core::result::Result<T, Error>;
+
 /// Order of the triple sections.
 /// Only SPO is tested, others probably don't work correctly.
 #[allow(missing_docs)]
 #[repr(u8)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "cache", derive(serde::Deserialize, serde::Serialize))]
 pub enum Order {
+    #[default]
     Unknown = 0,
     SPO = 1,
     SOP = 2,
@@ -41,7 +43,7 @@ pub enum Order {
 }
 
 impl TryFrom<u32> for Order {
-    type Error = eyre::Error;
+    type Error = Error;
 
     fn try_from(original: u32) -> Result<Self> {
         match original {
@@ -52,7 +54,7 @@ impl TryFrom<u32> for Order {
             4 => Ok(Order::POS),
             5 => Ok(Order::OSP),
             6 => Ok(Order::OPS),
-            _ => Err(eyre!("Unrecognized order")),
+            n => Err(Error::UnrecognizedTriplesOrder(n)),
         }
     }
 }
@@ -68,7 +70,7 @@ pub struct OpIndex {
 
 #[cfg(feature = "cache")]
 impl serde::Serialize for OpIndex {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
     where
         S: serde::ser::Serializer,
     {
@@ -88,7 +90,7 @@ impl serde::Serialize for OpIndex {
 
 #[cfg(feature = "cache")]
 impl<'de> serde::Deserialize<'de> for OpIndex {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
     where
         D: serde::de::Deserializer<'de>,
     {
@@ -155,6 +157,40 @@ pub struct TriplesBitmap {
     pub wavelet_y: WaveletMatrix<Rank9Sel>,
 }
 
+#[derive(Debug)]
+pub enum Level {
+    Y,
+    Z,
+}
+
+/// The error type for the triples bitmap read and write function.
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("failed to read control info")]
+    ControlInfo(#[from] control_info::Error),
+    #[error("bitmap error in the {0:?} level")]
+    Bitmap(Level, #[source] bitmap::Error),
+    #[error("sequence read error")]
+    Sequence(Level, #[source] sequence::Error),
+    #[error("unspecified triples order")]
+    UnspecifiedTriplesOrder,
+    #[error("unknown triples order")]
+    UnknownTriplesOrder,
+    #[error("unrecognized triples order {0}")]
+    UnrecognizedTriplesOrder(u32),
+    #[error("unknown triples format {0}")]
+    UnknownTriplesFormat(String),
+    #[error("triple lists are not supported yet")]
+    TriplesList,
+    #[error("({0},{1},{2}) none of the components of a triple may be 0.")]
+    TripleComponentZero(usize, usize, usize),
+    #[error("unspecified external library error")]
+    External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("cache decode error")]
+    #[cfg(feature = "cache")]
+    Decode(#[from] bincode::error::DecodeError),
+}
+
 impl fmt::Debug for TriplesBitmap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "total size {}", ByteSize(self.size_in_bytes() as u64))?;
@@ -166,7 +202,7 @@ impl fmt::Debug for TriplesBitmap {
 
 #[cfg(feature = "cache")]
 impl serde::Serialize for TriplesBitmap {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
     where
         S: serde::ser::Serializer,
     {
@@ -196,7 +232,7 @@ impl serde::Serialize for TriplesBitmap {
 
 #[cfg(feature = "cache")]
 impl<'de> serde::Deserialize<'de> for TriplesBitmap {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
     where
         D: serde::de::Deserializer<'de>,
     {
@@ -230,13 +266,14 @@ impl<'de> serde::Deserialize<'de> for TriplesBitmap {
 
 impl TriplesBitmap {
     /// read the whole triple section including control information
+    // TODO: rename to "read" for consistency with the other components and rename existing read function accordingly
     pub fn read_sect<R: BufRead>(reader: &mut R) -> Result<Self> {
         let triples_ci = ControlInfo::read(reader)?;
 
         match &triples_ci.format[..] {
             "<http://purl.org/HDT/hdt#triplesBitmap>" => TriplesBitmap::read(reader, &triples_ci),
-            "<http://purl.org/HDT/hdt#triplesList>" => Err(eyre!("Triples Lists are not supported yet.")),
-            _ => Err(eyre!("Unknown triples listing format.")),
+            "<http://purl.org/HDT/hdt#triplesList>" => Err(Error::TriplesList),
+            f => Err(Error::UnknownTriplesFormat(f.to_owned())),
         }
     }
 
@@ -245,8 +282,8 @@ impl TriplesBitmap {
     pub fn load_cache<R: BufRead>(reader: &mut R, info: &ControlInfo) -> Result<Self> {
         match &info.format[..] {
             "<http://purl.org/HDT/hdt#triplesBitmap>" => TriplesBitmap::load(reader),
-            "<http://purl.org/HDT/hdt#triplesList>" => Err(eyre!("Triples Lists are not supported yet.")),
-            _ => Err(eyre!("Unknown triples listing format.")),
+            "<http://purl.org/HDT/hdt#triplesList>" => Err(Error::TriplesList),
+            f => Err(Error::UnknownTriplesFormat(f.to_owned())),
         }
     }
 
@@ -321,21 +358,22 @@ impl TriplesBitmap {
 
     fn read<R: BufRead>(reader: &mut R, triples_ci: &ControlInfo) -> Result<Self> {
         // read order
+        //let order: Order = Order::try_from(triples_ci.get("order").unwrap().parse::<u32>());
         let order: Order;
         if let Some(n) = triples_ci.get("order").and_then(|v| v.parse::<u32>().ok()) {
             order = Order::try_from(n)?;
         } else {
-            return Err(eyre!("Unrecognized order"));
+            return Err(Error::UnspecifiedTriplesOrder);
         }
 
         // read bitmaps
-        let bitmap_y = Bitmap::read(reader).wrap_err("Failed to read Y level bitmap")?;
-        let bitmap_z = Bitmap::read(reader).wrap_err("Failed to read Z level bitmap")?;
+        let bitmap_y = Bitmap::read(reader).map_err(|e| Error::Bitmap(Level::Y, e))?;
+        let bitmap_z = Bitmap::read(reader).map_err(|e| Error::Bitmap(Level::Z, e))?;
 
         // read sequences
-        let sequence_y = Sequence::read(reader)?;
+        let sequence_y = Sequence::read(reader).map_err(|e| Error::Sequence(Level::Y, e))?;
         let wavelet_thread = std::thread::spawn(|| Self::build_wavelet(sequence_y));
-        let mut sequence_z = Sequence::read(reader)?;
+        let mut sequence_z = Sequence::read(reader).map_err(|e| Error::Sequence(Level::Z, e))?;
 
         // construct adjacency lists
         // construct object-based index to traverse from the leaves and support ??O and ?PO queries
@@ -361,8 +399,9 @@ impl TriplesBitmap {
         }
         // reduce memory consumption of index by using adjacency list
         let mut bitmap_index_bitvector = BitVector::new();
+        #[allow(clippy::redundant_closure_for_method_calls)] // false positive, anyhow transitive dep
         let mut cv = CompactVector::with_capacity(entries, sucds::utils::needed_bits(entries))
-            .map_err(|err| eyre!(Box::new(err)))?;
+            .map_err(|e| e.into_boxed_dyn_error())?;
         let wavelet_y = wavelet_thread.join().unwrap();
         /*
         let get_p = |pos_z: u32| {
@@ -388,12 +427,22 @@ impl TriplesBitmap {
         Ok(TriplesBitmap { order, bitmap_y, adjlist_z, op_index, wavelet_y })
     }
 
+    pub fn write(&self, write: &mut impl std::io::Write) -> Result<()> {
+        ControlInfo::bitmap_triples(self.order.clone() as u32, self.adjlist_z.len() as u32).write(write)?;
+        self.bitmap_y.write(write).map_err(|e| Error::Bitmap(Level::Y, e))?;
+        self.adjlist_z.bitmap.write(write).map_err(|e| Error::Bitmap(Level::Z, e))?;
+        let y = self.wavelet_y.iter().collect::<Vec<_>>();
+        Sequence::new(&y, self.wavelet_y.alph_width()).write(write).map_err(|e| Error::Sequence(Level::Y, e))?;
+        self.adjlist_z.sequence.write(write).map_err(|e| Error::Sequence(Level::Z, e))?;
+        Ok(())
+    }
+
     /// Transform the given IDs of the layers in triple section order to a triple ID.
     /// Warning: At the moment only SPO is properly supported anyways, in which case this is equivalent to `TripleId::new(x,y,z)`.
     /// Other orders may lead to undefined behaviour.
-    pub fn coord_to_triple(&self, x: Id, y: Id, z: Id) -> Result<TripleId> {
+    pub const fn coord_to_triple(&self, x: Id, y: Id, z: Id) -> Result<TripleId> {
         if x == 0 || y == 0 || z == 0 {
-            return Err(eyre!(format!("({x},{y},{z}) none of the components of a triple may be 0."),));
+            return Err(Error::TripleComponentZero(x, y, z));
         }
         match self.order {
             Order::SPO => Ok(TripleId::new(x, y, z)),
@@ -402,7 +451,7 @@ impl TriplesBitmap {
             Order::POS => Ok(TripleId::new(y, z, x)),
             Order::OSP => Ok(TripleId::new(z, x, y)),
             Order::OPS => Ok(TripleId::new(z, y, x)),
-            Order::Unknown => Err(eyre!("unknown triples order")),
+            Order::Unknown => Err(Error::UnknownTriplesOrder),
         }
     }
 }
@@ -449,8 +498,8 @@ mod tests {
     use crate::header::Header;
     use crate::tests::init;
     use crate::{FourSectDict, IdKind};
+    use fs_err::File;
     use pretty_assertions::assert_eq;
-    use std::fs::File;
     use std::io::BufReader;
 
     /// Iterator over all triples with a given ID in the specified position (subject, predicate or object).
@@ -465,14 +514,14 @@ mod tests {
     }
 
     #[test]
-    fn read_triples() {
+    fn read_triples() -> color_eyre::Result<()> {
         init();
-        let file = File::open("tests/resources/snikmeta.hdt").expect("error opening file");
+        let file = File::open("tests/resources/snikmeta.hdt")?;
         let mut reader = BufReader::new(file);
-        ControlInfo::read(&mut reader).unwrap();
-        Header::read(&mut reader).unwrap();
-        let _dict = FourSectDict::read(&mut reader).unwrap();
-        let triples = TriplesBitmap::read_sect(&mut reader).unwrap();
+        ControlInfo::read(&mut reader)?;
+        Header::read(&mut reader)?;
+        let _dict = FourSectDict::read(&mut reader)?;
+        let triples = TriplesBitmap::read_sect(&mut reader)?;
         let v: Vec<TripleId> = triples.into_iter().collect::<Vec<TripleId>>();
         assert_eq!(v.len(), 328);
         assert_eq!(v[0].subject_id, 1);
@@ -518,5 +567,6 @@ mod tests {
         assert_eq!(v, SubjectIter::with_pattern(&triples, &TripleId::new(0, 0, 0)).collect::<Vec<_>>());
         // SP? where S and P are in the graph, but not together
         assert_eq!(0, SubjectIter::with_pattern(&triples, &TripleId::new(12, 14, 154)).count());
+        Ok(())
     }
 }

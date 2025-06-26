@@ -6,11 +6,11 @@ pub mod vbyte;
 
 // byte containers
 mod adj_list;
-mod bitmap;
-mod sequence;
+pub mod bitmap;
+pub mod sequence;
 
 // control info section reader
-mod control_info;
+pub mod control_info;
 
 pub use adj_list::AdjList;
 pub use bitmap::Bitmap;

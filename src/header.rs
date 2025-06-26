@@ -1,10 +1,11 @@
 use crate::containers::ControlInfo;
 use crate::containers::rdf::{Id, Literal, Term, Triple};
-use eyre::{Result, WrapErr, eyre};
 use ntriple::parser::triple_line;
 use std::collections::BTreeSet;
 use std::io::BufRead;
 use std::str;
+
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// Metadata about the dataset, see <https://www.rdfhdt.org/hdt-binary-format/#header>.
 #[derive(Debug, Clone)]
@@ -17,23 +18,39 @@ pub struct Header {
     pub body: BTreeSet<Triple>,
 }
 
+/// The error type for the `read` method.
+#[derive(thiserror::Error, Debug)]
+#[error("failed to read HDT header")]
+pub enum Error {
+    #[error("{0}")]
+    Other(String),
+    Io(#[from] std::io::Error),
+    ControlInfo(#[from] crate::containers::control_info::Error),
+    #[error("invalid header format {0}, only 'ntriples' is supported")]
+    InvalidHeaderFormat(String),
+    #[error("invalid header length '{0}'")]
+    InvalidHeaderLength(String),
+    #[error("missing header length")]
+    MissingHeaderLength,
+}
+
 impl Header {
     /// Reader needs to be positioned directly after the global control information.
     pub fn read<R: BufRead>(reader: &mut R) -> Result<Self> {
         let header_ci = ControlInfo::read(reader)?;
         if header_ci.format != "ntriples" {
-            return Err(eyre!("Invalid header format {}, only 'ntriples' is supported", header_ci.format));
+            return Err(Error::InvalidHeaderFormat(header_ci.format));
         }
 
-        let ls = header_ci.get("length").ok_or_else(|| eyre!("missing header length"))?;
-        let length = ls.parse::<usize>().wrap_err_with(|| format!("invalid header length '{ls}'"))?;
+        let ls = header_ci.get("length").ok_or(Error::MissingHeaderLength)?;
+        let length = ls.parse::<usize>().map_err(|_| Error::InvalidHeaderLength(ls))?;
 
         let mut body_buffer: Vec<u8> = vec![0; length];
         reader.read_exact(&mut body_buffer)?;
         let mut body = BTreeSet::new();
 
         for line_slice in body_buffer.split(|b| b == &b'\n') {
-            let line = str::from_utf8(line_slice).wrap_err("Header is not UTF-8")?;
+            let line = str::from_utf8(line_slice).map_err(|_| Error::Other("Header is not UTF-8".to_owned()))?;
             if let Ok(Some(triple)) = triple_line(line) {
                 let subject = match triple.subject {
                     ntriple::Subject::IriRef(iri) => Id::Named(iri),
@@ -48,7 +65,10 @@ impl Header {
                     ntriple::Object::Lit(lit) => Term::Literal(match lit.data_type {
                         ntriple::TypeLang::Lang(lan) => Literal::new_lang(lit.data, lan),
                         ntriple::TypeLang::Type(data_type) => {
-                            if data_type == "http://www.w3.org/2001/XMLSchema#string" {
+                            // workaround incorrect https in xsd prefix in ntriples dependency
+                            if data_type == "http://www.w3.org/2001/XMLSchema#string"
+                                || data_type == "https://www.w3.org/2001/XMLSchema#string"
+                            {
                                 Literal::new(lit.data)
                             } else {
                                 Literal::new_typed(lit.data, data_type)
@@ -62,28 +82,34 @@ impl Header {
         }
         Ok(Header { format: header_ci.format, length, body })
     }
+
+    pub fn write(&self, write: &mut impl std::io::Write) -> Result<()> {
+        ControlInfo::header(self.length).write(write)?;
+        for triple in &self.body {
+            writeln!(write, "{triple}")?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::init;
-    use std::fs::File;
+    use fs_err::File;
     use std::io::BufReader;
 
     #[test]
-    fn read_header() {
+    fn read_header() -> color_eyre::Result<()> {
         init();
-        let file = File::open("tests/resources/yago_header.hdt").expect("error opening file");
+        let file = File::open("tests/resources/yago_header.hdt")?;
         let mut reader = BufReader::new(file);
-        ControlInfo::read(&mut reader).expect("error reading control info");
+        ControlInfo::read(&mut reader)?;
 
-        if let Ok(header) = Header::read(&mut reader) {
-            assert_eq!(header.format, "ntriples");
-            assert_eq!(header.length, 1891);
-            assert_eq!(header.body.len(), 22);
-        } else {
-            panic!("Failed to read header");
-        }
+        let header = Header::read(&mut reader)?;
+        assert_eq!(header.format, "ntriples");
+        assert_eq!(header.length, 1891);
+        assert_eq!(header.body.len(), 22);
+        Ok(())
     }
 }
